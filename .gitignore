@@ -19,7 +19,12 @@ market_data.csv
 __pycache__/
 *.pyc
 
+
 # IDE
 .vscode/
 .idea/
 .DS_Store
+
+# Secrets
+gemini_secrets.json
+openrouter_secrets.json

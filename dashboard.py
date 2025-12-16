@@ -1,96 +1,132 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import json
+import time
+import config
+from paper_exchange import PaperExchange
+from pattern_recognition import PatternRecognizer
+from sqlalchemy import create_engine
 import plotly.graph_objects as go
-from streamlit_autorefresh import st_autorefresh
-import dashboard_db as db
+import os
 
-st.set_page_config(page_title="Crypto Real-Time Analytics", layout="wide", page_icon="⚡")
+# --- Config ---
+st.set_page_config(page_title="Crypto Jarvis Dashboard", layout="wide", page_icon="⚡")
+st.title("⚡ Crypto Jarvis: Live Command Center")
 
-# Auto-refresh every 5 seconds (more stable)
-count = st_autorefresh(interval=5000, limit=None, key="fizzbuzz")
+# --- Auto-Refresh (Every 5 seconds) ---
+if st.button("Refresh Data"):
+    st.rerun()
 
-# Sidebar - System Health
-st.sidebar.title("⚡ Data Pipeline")
-ticks_last_min = db.get_system_metrics()
-st.sidebar.metric("Ingestion Rate", f"{ticks_last_min} ticks/min")
-st.sidebar.success("TimescaleDB Connected (Port 5433)")
+# --- Database ---
+engine = create_engine(config.DB_URI)
 
-# Title
-st.title("Crypto Algo-Trading Control Center")
+# --- Tabs ---
+tab1, tab2, tab3, tab4 = st.tabs(["🚀 Live Market", "🧠 AI Council", "📜 Paper Trading", "📉 Patterns"])
 
-# Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📈 Price Action", "🌊 Order Flow (CVD)", "📊 Derivatives & Greeks", "📰 News & Whales"])
-
+# --- TAB 1: Live Market ---
 with tab1:
-    st.subheader("Live Market Data (1-Sec Aggregation)")
-    df_ticks = db.fetch_ticks(seconds=60)
-    
-    if not df_ticks.empty:
-        # Create multi-line chart for symbols
-        fig = px.line(df_ticks, x='bucket', y='close_price', color='symbol', title="Real-Time Price Action (Last 60s)")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Waiting for data...")
-
-with tab2:
-    st.subheader("Cumulative Volume Delta (CVD)")
-    st.info("Visualizes Aggressive Buying vs Selling Pressure (Phase 4.5 Feature)")
-    
-    df_cvd = db.fetch_cvd(seconds=300)
-    if not df_cvd.empty:
-        # Calculate Delta
-        df_cvd['delta'] = df_cvd['buy_vol'] - df_cvd['sell_vol']
-        # Cumulative sum per symbol
-        df_cvd['cvd'] = df_cvd.groupby('symbol')['delta'].cumsum()
-        
-        fig_cvd = px.line(df_cvd, x='bucket', y='cvd', color='symbol', title="CVD Trend (Last 5 Mins)")
-        st.plotly_chart(fig_cvd, use_container_width=True)
-        
-        # Bar chart for Net Flow
-        fig_flow = px.bar(df_cvd, x='bucket', y='delta', color='symbol', title="Net Order Flow per 5s Bucket")
-        st.plotly_chart(fig_flow, use_container_width=True)
-    else:
-        st.warning("Insufficient data for CVD calculation.")
-
-with tab3:
-    st.subheader("Derivatives Intelligence")
     col1, col2 = st.columns(2)
-    
-    df_derivs = db.fetch_derivatives()
-    if not df_derivs.empty:
-        with col1:
-            st.markdown("### Funding Rates & Open Interest")
-            # Show if ANY interesting field is present, don't dropna row-wise
-            cols = ['symbol', 'funding_rate', 'open_interest']
-            st.dataframe(df_derivs[cols].dropna(subset=['funding_rate', 'open_interest'], how='all').head(20))
-        
-        with col2:
-            st.markdown("### Options Flow (Greeks)")
-            # Filter for options only
-            df_options = df_derivs[df_derivs['option_type'].notna()]
-            if not df_options.empty:
-                st.dataframe(df_options[['symbol', 'expiry', 'strike', 'option_type', 'iv', 'delta', 'gamma']])
-            else:
-                st.info("No Options data captured yet.")
-    else:
-        st.warning("No derivatives data.")
+    with col1:
+        st.subheader("Latest Ticks (Price)")
+        try:
+             df_ticks = pd.read_sql("SELECT * FROM market_ticks WHERE source NOT LIKE '%%Book%%' AND source NOT LIKE '%%Depth%%' ORDER BY time DESC LIMIT 20", engine)
+             st.dataframe(df_ticks)
+        except Exception as e:
+             st.error(f"DB Error: {e}")
+             
+    with col2:
+        st.subheader("News Sentiment")
+        try:
+             df_news = pd.read_sql("SELECT time, source, title, sentiment FROM news_sentiment ORDER BY time DESC LIMIT 10", engine)
+             st.dataframe(df_news)
+        except Exception as e:
+             st.error(f"DB Error: {e}")
 
-with tab4:
-    col_news, col_whale = st.columns(2)
+# --- TAB 2: AI Council ---
+with tab2:
+    st.header("The Council's War Room")
+    # Read Logs
+    log_path_1 = f"{config.LOG_DIR}/council.log"
+    log_path_2 = f"{config.LOG_DIR}/council_ai.log"
     
-    df_news = db.fetch_news()
-    if not df_news.empty:
-        with col_news:
-            st.subheader("📰 CryptoPanic Headlines")
-            headlines = df_news[df_news['source'] == 'CryptoPanic']
-            for index, row in headlines.iterrows():
-                sentiment_emoji = "🟢" if row['sentiment'] == 'Bullish' else "🔴" if row['sentiment'] == 'Bearish' else "⚪"
-                st.markdown(f"**{row['time'].strftime('%H:%M:%S')}** {sentiment_emoji} [{row['title']}](#)")
-        
-        with col_whale:
-            st.subheader("🐋 Whale Alerts")
-            whales = df_news[df_news['source'].str.contains('Whale')]
-            st.dataframe(whales[['time', 'currency', 'amount']])
-    else:
-        st.info("No news or whale alerts yet.")
+    log_file = log_path_1 if os.path.exists(log_path_1) and os.path.getsize(log_path_1) > 0 else log_path_2
+    
+    try:
+        with open(log_file, "r") as f:
+            lines = f.readlines()
+            
+        # Parse for decisions
+        decisions = []
+        current_decision = ""
+        capture = False
+        for line in reversed(lines):
+            if "--- COMMANDER DECISION ---" in line:
+                capture = True
+                continue
+            if "---------------------------" in line and capture:
+                capture = False
+                decisions.append(current_decision)
+                current_decision = ""
+            if capture:
+                current_decision = line + current_decision # Reverse append
+                
+        if decisions:
+            st.info("Latest Commander Order:")
+            st.markdown(decisions[0])
+        else:
+            st.warning("No Council Decisions found in logs yet.")
+            
+    except FileNotFoundError:
+        st.error("Council Log not found. Is it running?")
+
+# --- TAB 3: Paper Trading ---
+with tab3:
+    st.header("Paper Trading Portfolio (Virtual: $5k)")
+    pe = PaperExchange()
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Balance (USDT)", f"${pe.get_balance():.2f}")
+    
+    # Calculate Unrealized PnL (Mock Price for speed)
+    current_btc = 90000.0
+    try:
+        last_tick = pd.read_sql("SELECT price FROM market_ticks WHERE symbol='btcusdt' ORDER BY time DESC LIMIT 1", engine)
+        if not last_tick.empty:
+            current_btc = float(last_tick.iloc[0]['price'])
+    except: pass
+    
+    pnl, details = pe.get_live_pnl({'btcusdt': current_btc})
+    col2.metric("Unrealized PnL", f"${pnl:.2f}", delta_color="normal")
+    col3.metric("BTC Price Ref", f"${current_btc:.2f}")
+    
+    st.subheader("Open Positions")
+    st.write(pe.portfolio["positions"])
+    
+    st.subheader("Trade History")
+    st.dataframe(pd.DataFrame(pe.portfolio["history"]))
+
+# --- TAB 4: Chart Patterns ---
+with tab4:
+    st.header("Detected Chart Patterns (OHLCV)")
+    pr = PatternRecognizer()
+    patterns = pr.run_scan("btcusdt")
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        # Show mini chart
+        df_ohlc = pr.fetch_ohlcv("btcusdt", limit=50)
+        if df_ohlc is not None:
+            fig = go.Figure(data=[go.Candlestick(x=df_ohlc.index,
+                open=df_ohlc['open'], high=df_ohlc['high'],
+                low=df_ohlc['low'], close=df_ohlc['close'])])
+            st.plotly_chart(fig, use_container_width=True)
+            
+    with col2:
+        st.subheader("Latest Patterns")
+        if patterns:
+             for p in patterns:
+                 st.success(f"✅ {p}")
+        else:
+             st.info("No patterns detected in last candle.")
+
+    st.caption("Pattern logic runs on 1-minute aggregations.")

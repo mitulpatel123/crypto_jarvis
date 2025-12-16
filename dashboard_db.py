@@ -7,13 +7,13 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # DB Configuration
-DB_URI = "postgres://postgres:password@127.0.0.1:5433/postgres"
+import config
 
 @st.cache_resource
 def get_connection():
     """Establishes a persistent connection to TimescaleDB."""
     try:
-        conn = psycopg2.connect(DB_URI)
+        conn = psycopg2.connect(config.DB_URI)
         return conn
     except Exception as e:
         st.error(f"Failed to connect to DB: {e}")
@@ -60,9 +60,9 @@ def fetch_cvd(seconds=300):
 def fetch_derivatives():
     """Fetch latest Funding Rates and Options Data."""
     query = """
-    SELECT symbol, funding_rate, open_interest, iv, delta, gamma, expiry, strike, option_type
+    SELECT symbol, funding_rate, open_interest, iv, delta, gamma, expiry, strike, option_type, source
     FROM derivatives_stats
-    WHERE time > NOW() - INTERVAL '5 minutes'
+    WHERE time > NOW() - INTERVAL '15 minutes'
     ORDER BY time DESC
     LIMIT 100;
     """
@@ -99,3 +99,25 @@ def get_system_metrics():
                 return cur.fetchone()[0]
         except: return 0
     return 0
+
+def fetch_feed_health():
+    """Get last timestamp for each data source (Observability)."""
+    # Union query to get max time from all tables
+    query = """
+    SELECT source, MAX(time) as last_seen
+    FROM (
+        SELECT source, time FROM market_ticks WHERE time > NOW() - INTERVAL '1 hour' AND source IS NOT NULL
+        UNION ALL
+        SELECT source, time FROM derivatives_stats WHERE time > NOW() - INTERVAL '1 hour' AND source IS NOT NULL
+        UNION ALL
+        SELECT source, time FROM news_sentiment WHERE time > NOW() - INTERVAL '24 hours' AND source IS NOT NULL
+    ) combined
+    GROUP BY source
+    ORDER BY last_seen DESC;
+    """
+    conn = get_connection()
+    if conn:
+        try:
+            return pd.read_sql(query, conn)
+        except: return pd.DataFrame()
+    return pd.DataFrame()

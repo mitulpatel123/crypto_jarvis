@@ -1,0 +1,16 @@
+pandas
+aiohttp
+streamlit
+psycopg2-binary
+sqlalchemy
+selenium
+webdriver-manager
+requests
+plotly
+mitmproxy==10.0.0
+bcrypt<4.0.0
+beautifulsoup4
+brotli
+pandas_ta
+httpx
+nest_asyncio

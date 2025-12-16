@@ -1,0 +1,21 @@
+{
+    "balance": 4999.5,
+    "positions": {
+        "btcusdt": {
+            "size": -0.05555555555555555,
+            "entry_price": 90000.0,
+            "leverage": 5.0
+        }
+    },
+    "history": [
+        {
+            "time": "2025-12-16 16:48:53",
+            "symbol": "btcusdt",
+            "action": "SELL",
+            "price": 90000.0,
+            "amount_usd": 1000.0,
+            "leverage": 5.0,
+            "fee": 0.5
+        }
+    ]
+}
