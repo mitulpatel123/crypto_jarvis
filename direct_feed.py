@@ -148,7 +148,36 @@ class MarketFeed:
                 print(f"[!] Binance Error: {e}")
                 await asyncio.sleep(5)
 
-    def parse_binance(self, data):
+    async def connect_binance_spot(self):
+        # Spot URL: stream.binance.com:9443
+        # Streams: <symbol>@aggTrade / <symbol>@depth5
+        streams = [
+            "btcusdt@aggTrade", "btcusdt@depth5@100ms",
+            "ethusdt@aggTrade", "ethusdt@depth5@100ms",
+            "solusdt@aggTrade", "solusdt@depth5@100ms"
+        ]
+        
+        while self.running:
+            url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
+            proxy = self.proxy_manager.get_random_proxy()
+            # print(f"[*] Connecting to Binance SPOT (Proxy)...")
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.ws_connect(url, proxy=proxy, ssl=False) as ws:
+                        print("[*] Connected to Binance SPOT")
+                        async for msg in ws:
+                            if not self.running: break
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                # Reuse parsing logic (payload structure is same for Spot/Futures aggTrade)
+                                self.parse_binance(json.loads(msg.data), source_suffix="_Spot")
+                            elif msg.type == aiohttp.WSMsgType.ERROR:
+                                break
+            except Exception as e:
+                # print(f"[!] Binance Spot Error: {e}") # Reduce noise
+                await asyncio.sleep(5)
+
+    def parse_binance(self, data, source_suffix=""):
+        # source_suffix allows distinguishing Futures vs Spot in DB source column
         stream = data.get("stream", "")
         payload = data.get("data", {})
         if "aggTrade" in stream:
@@ -160,7 +189,7 @@ class MarketFeed:
                 "volume": float(payload.get("q")),
                 "bid": None, "ask": None,
                 "side": "SELL" if is_maker else "BUY",
-                "source": "Binance_AggTrade"
+                "source": f"Binance_AggTrade{source_suffix}"
             }
             self.write_queue.put_nowait(entry)
         elif "depth" in stream:
@@ -172,7 +201,8 @@ class MarketFeed:
                     "symbol": payload.get("s"),
                     "price": (float(bids[0][0]) + float(asks[0][0])) / 2,
                     "bid": float(bids[0][0]), "ask": float(asks[0][0]),
-                    "volume": 0, "side": None, "source": "Binance_Depth"
+                    "volume": 0, "side": None, 
+                    "source": f"Binance_Depth{source_suffix}"
                 }
                 self.write_queue.put_nowait(entry)
 
@@ -274,20 +304,61 @@ class MarketFeed:
                 async with aiohttp.ClientSession() as session:
                     async with session.ws_connect(url, proxy=proxy, ssl=False) as ws:
                         print("[*] Connected to Deribit")
-                        msg = {
-                            "jsonrpc": "2.0", "id": 1, "method": "public/subscribe",
-                            "params": {
-                                "channels": [
-                                    "ticker.BTC-PERPETUAL.100ms", "ticker.ETH-PERPETUAL.100ms", "ticker.SOL-PERPETUAL.100ms"
-                                ]
+                        
+                        # STEP 1: Ask Deribit for the list of ALL active options
+                        # We do this for BTC, ETH, and SOL
+                        all_channels = []
+                        # Add Perps manually first
+                        all_channels.extend(["ticker.BTC-PERPETUAL.100ms", "ticker.ETH-PERPETUAL.100ms", "ticker.SOL-PERPETUAL.100ms"])
+                        
+                        for currency in ["BTC", "ETH", "SOL"]:
+                            msg = {
+                                "jsonrpc": "2.0",
+                                "id": 8888,
+                                "method": "public/get_instruments",
+                                "params": {
+                                    "currency": currency,
+                                    "kind": "option",
+                                    "expired": False
+                                }
                             }
-                        }
-                        await ws.send_json(msg)
+                            await ws.send_json(msg)
+                            response = await ws.receive_json()
+                            
+                            # Extract every single symbol name
+                            instruments = response.get("result", [])
+                            for inst in instruments:
+                                symbol = inst["instrument_name"]
+                                # Add to our subscription list
+                                all_channels.append(f"ticker.{symbol}.100ms")
+                        
+                        print(f"[*] Found {len(all_channels)} instruments. Subscribing in batches...")
+
+                        # STEP 2: Subscribe to them in batches
+                        # (Deribit might reject if you send 5000 in one message, so we split it)
+                        batch_size = 100
+                        for i in range(0, len(all_channels), batch_size):
+                            batch = all_channels[i:i + batch_size]
+                            sub_msg = {
+                                "jsonrpc": "2.0",
+                                "id": 1000 + i,
+                                "method": "public/subscribe",
+                                "params": {"channels": batch}
+                            }
+                            await ws.send_json(sub_msg)
+                            # Sleep briefly to avoid hitting rate limits
+                            await asyncio.sleep(0.1)
+
+                        print("[*] Successfully subscribed to ALL options.")
+
+                        # STEP 3: Listen for the data
                         async for msg_raw in ws:
                             if not self.running: break
                             if msg_raw.type == aiohttp.WSMsgType.TEXT:
                                 data = json.loads(msg_raw.data)
-                                if "params" in data: self.parse_deribit(data["params"])
+                                if "params" in data: 
+                                    self.parse_deribit(data["params"])
+                                    
             except Exception as e:
                 print(f"[!] Deribit Error: {e}")
                 await asyncio.sleep(5)
@@ -331,7 +402,8 @@ class MarketFeed:
     async def run(self):
         tasks = [
             asyncio.create_task(self.db_writer()),
-            asyncio.create_task(self.connect_binance()),
+            asyncio.create_task(self.connect_binance()), # Futures
+            asyncio.create_task(self.connect_binance_spot()), # Spot
             asyncio.create_task(self.connect_bybit()),
             asyncio.create_task(self.connect_deribit()) 
         ]
