@@ -139,21 +139,36 @@ class TheCouncil:
             return f"Agent Error: {e}"
 
     def parse_and_execute(self, symbol, decision_text, current_price):
-        """Parses Commander's output and executes paper trade."""
+        """Parses Commander's output (JSON preferred) and executes paper trade."""
         try:
             action = "HOLD"
             leverage = 1.0
             
-            # Simple Regex Parsing
-            if "ACTION: BUY" in decision_text.upper():
-                action = "BUY"
-            elif "ACTION: SELL" in decision_text.upper():
-                action = "SELL"
-            
-            # Extract Leverage
-            lev_match = re.search(r'LEVERAGE:\s*(\d+)x?', decision_text, re.IGNORECASE)
-            if lev_match:
-                leverage = float(lev_match.group(1))
+            # 1. Attempt JSON Parsing
+            try:
+                # Find the first { and last }
+                match = re.search(r'(\{.*\})', decision_text, re.DOTALL)
+                if match:
+                    clean_text = match.group(1)
+                    data = json.loads(clean_text)
+                    
+                    if "decision" in data:
+                        action = data["decision"].get("action", "HOLD").upper()
+                        leverage = float(data["decision"].get("leverage", 1.0))
+                else:
+                    raise ValueError("No JSON object found")
+
+            except (json.JSONDecodeError, ValueError):
+                # 2. Fallback to Regex Parsing (Legacy support)
+                logger.warning("JSON Decode Failed. Falling back to Regex.")
+                if "ACTION: BUY" in decision_text.upper():
+                    action = "BUY"
+                elif "ACTION: SELL" in decision_text.upper():
+                    action = "SELL"
+                
+                lev_match = re.search(r'LEVERAGE:\s*(\d+)x?', decision_text, re.IGNORECASE)
+                if lev_match:
+                    leverage = float(lev_match.group(1))
 
             if action != "HOLD":
                 # Execute Trade ($1000 size for demo per trade)
@@ -207,28 +222,27 @@ class TheCouncil:
         {audit_report}
         
         TASK:
-        1. First, THINK STEP-BY-STEP (Chain of Thought). Weigh the Bullish vs Bearish evidence.
-        2. Second, decide the ACTION (BUY / SELL / HOLD).
-        3. Third, determine leverage based on confidence (1x - 50x).
+        1. Synthesize the Intelligence and Risk Audit.
+        2. decide ACTION (BUY / SELL / HOLD).
+        3. determine LEVERAGE (1x - 50x).
         
-        OUTPUT FORMAT:
-        [REASONING]
-        - Point 1
-        - Point 2
-        ...
-        
-        [DECISION]
-        ACTION: ...
-        LEVERAGE: ...
+        OUTPUT FORMAT (STRICT JSON ONLY):
+        {{
+            "reasoning": "Step-by-step logic...",
+            "decision": {{
+                "action": "BUY",
+                "leverage": 5
+            }}
+        }}
         """
-        decision = await self.run_agent("COMMANDER", commander_input, "Issue Final Order.")
+        decision_json = await self.run_agent("COMMANDER", commander_input, "Issue Final Order in JSON.")
         
-        logger.info(f"--- COMMANDER DECISION ---\n{decision}\n---------------------------")
+        logger.info(f"--- COMMANDER DECISION (RAW) ---\n{decision_json}\n---------------------------")
         
         # Execute Paper Trade
-        self.parse_and_execute(symbol, decision, current_price)
+        parsed_decision = self.parse_and_execute(symbol, decision_json, current_price)
         
-        return decision
+        return parsed_decision
 
     async def start_service(self):
         """Runs the War Room Loop continuously."""

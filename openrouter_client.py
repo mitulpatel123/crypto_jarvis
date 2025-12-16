@@ -80,8 +80,7 @@ class OpenRouterAgent:
             payload = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": f"SYSTEM INSTRUCTION: {system_prompt}\n\nUSER QUERY: {user_prompt}"}
                 ],
                 "temperature": 0.5,
                 "max_tokens": 2000

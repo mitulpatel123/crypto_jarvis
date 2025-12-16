@@ -36,8 +36,9 @@ class FeatureEngine:
         query = f"""
             SELECT time, price, volume, side 
             FROM market_ticks 
-            WHERE symbol = '{symbol}' OR symbol = '{symbol.upper()}'
-            ORDER BY time DESC LIMIT {limit};
+            WHERE (symbol = '{symbol}' OR symbol = '{symbol.upper()}')
+            AND time > NOW() - INTERVAL '1 hour'
+            ORDER BY time ASC;
         """
         try:
             df = pd.read_sql(query, self.engine)
@@ -92,8 +93,38 @@ class FeatureEngine:
         }
 
     def calculate_orderflow(self, df):
-        """Placeholder for now"""
-        return {} 
+        """Calculate Cumulative Volume Delta (CVD)"""
+        if df.empty or 'side' not in df.columns: return {}
+        
+        try:
+            # Filter valid trades
+            trades = df[df['side'].isin(['BUY', 'SELL', 'Buy', 'Sell', 'buy', 'sell'])]
+            
+            if trades.empty: return {"cvd_current": 0.0, "cvd_slope": 0.0}
+            
+            # Vectorized calculation
+            # Assign +Vol for BUY, -Vol for SELL
+            trades = trades.copy()
+            trades['signed_vol'] = trades.apply(lambda x: x['volume'] if str(x['side']).upper() == 'BUY' else -x['volume'], axis=1)
+            
+            # Cumulative Sum
+            trades['cvd'] = trades['signed_vol'].cumsum()
+            
+            # Calculate Slope (Change over last 10 points)
+            if len(trades) > 10:
+                slope = trades['cvd'].iloc[-1] - trades['cvd'].iloc[-10]
+            else:
+                slope = 0.0
+                
+            return {
+                "cvd_current": float(trades['cvd'].iloc[-1]),
+                "cvd_slope": float(slope),
+                "volume_buy": float(trades[trades['signed_vol'] > 0]['volume'].sum()),
+                "volume_sell": float(trades[trades['signed_vol'] < 0]['volume'].sum())
+            }
+        except Exception as e:
+            logger.error(f"CVD Error: {e}")
+            return {} 
 
     def calculate_patterns(self, df):
         """Candlestick Pattern Recognition"""
@@ -103,7 +134,7 @@ class FeatureEngine:
         try:
             # Detect Doji
             doji = ta.cdl_doji(df['open'], df['high'], df['low'], df['close'])
-            if doji.iloc[-1] != 0: patterns['doji'] = True
+            if doji is not None and not doji.empty and doji.iloc[-1] != 0: patterns['doji'] = True
             
             # Detect Engulfing (Note: requires open/high/low/close Series)
             # pandas_ta likely exposes it as 'cdl_engulfing' OR via strategy. 
@@ -118,13 +149,13 @@ class FeatureEngine:
             
             if hasattr(ta, 'cdl_engulfing'):
                 engulfing = ta.cdl_engulfing(df['open'], df['high'], df['low'], df['close'])
-                if engulfing is not None and engulfing.iloc[-1] != 0: 
+                if engulfing is not None and not engulfing.empty and engulfing.iloc[-1] != 0: 
                     patterns['engulfing'] = "BULL" if engulfing.iloc[-1] > 0 else "BEAR"
             
             # Hammer
             if hasattr(ta, 'cdl_hammer'):
                 hammer = ta.cdl_hammer(df['open'], df['high'], df['low'], df['close'])
-                if hammer is not None and hammer.iloc[-1] != 0: patterns['hammer'] = True
+                if hammer is not None and not hammer.empty and hammer.iloc[-1] != 0: patterns['hammer'] = True
 
         except Exception as e:
             logger.error(f"Pattern Error: {e}")
@@ -168,11 +199,14 @@ class FeatureEngine:
 
                 # 3. Save
                 self.save_features(sym, "momentum", momentum)
-                # Orderflow temporarily disabled until we stream raw ticks better
-                # self.save_features(sym, "orderflow", orderflow)
+                
+                # Orderflow logic
+                orderflow = self.calculate_orderflow(df)
+                if orderflow:
+                    self.save_features(sym, "orderflow", orderflow)
             
-            # 4. Sleep (Fast update, e.g. 1s)
-            time.sleep(1.0)
+            # 4. Sleep (Reduced frequency for CPU conservation)
+            time.sleep(15.0)
 
 if __name__ == "__main__":
     try:

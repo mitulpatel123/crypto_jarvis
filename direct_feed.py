@@ -321,13 +321,24 @@ class MarketFeed:
                         all_channels.extend(["ticker.BTC-PERPETUAL.100ms", "ticker.ETH-PERPETUAL.100ms", "ticker.SOL-PERPETUAL.100ms"])
                         
                         for currency in ["BTC", "ETH", "SOL"]:
+                            # 1. Fetch Instruments
                             msg = {
                                 "jsonrpc": "2.0", "id": 8888, "method": "public/get_instruments",
                                 "params": {"currency": currency, "kind": "option", "expired": False}
                             }
                             await ws.send_json(msg)
-                            response = await ws.receive_json()
-                            instruments = response.get("result", [])
+                            
+                            # Wait for specific response loop
+                            instruments = []
+                            start_wait = time.time()
+                            while time.time() - start_wait < 10: # 10s timeout
+                                try:
+                                    resp = await ws.receive_json()
+                                    if resp.get("id") == 8888 and "result" in resp:
+                                        instruments = resp.get("result", [])
+                                        break
+                                except: pass
+                            
                             for inst in instruments:
                                 all_channels.append(f"ticker.{inst['instrument_name']}.100ms")
                         
@@ -338,7 +349,8 @@ class MarketFeed:
                             batch = all_channels[i:i + batch_size]
                             sub_msg = { "jsonrpc": "2.0", "id": 1000 + i, "method": "public/subscribe", "params": {"channels": batch} }
                             await ws.send_json(sub_msg)
-                            await asyncio.sleep(0.1)
+                            # Wait briefly to not flood
+                            await asyncio.sleep(0.05)
 
                         async for msg_raw in ws:
                             if not self.running: break
