@@ -1,0 +1,25 @@
+# Credentials & Secrets
+iproyal-proxies.txt
+.env
+keys/
+secrets/
+
+# System Logs
+logs/
+*.log
+traffic_log.txt
+*.pid
+
+# Data files (Exclude large CSV/JSONL if desired, but schema.sql is okay)
+captured_data.jsonl
+market_data.csv
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
