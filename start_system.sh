@@ -8,7 +8,7 @@ echo "[*] Initializing Phase 6 Hybrid Architecture..."
 
 # 1. Start Direct Feed (Market Data)
 echo "[1/3] Starting Direct Feed (Binance/Bybit/Deribit)..."
-nohup python3 direct_feed.py > "$LOG_DIR/feed.log" 2>&1 &
+nohup python3 -u direct_feed.py > "$LOG_DIR/feed.log" 2>&1 &
 FEED_PID=$!
 echo "      -> PID: $FEED_PID"
 echo $FEED_PID > "$LOG_DIR/feed.pid"
